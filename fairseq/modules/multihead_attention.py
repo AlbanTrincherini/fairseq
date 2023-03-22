@@ -24,6 +24,9 @@ from fairseq.modules.fairseq_dropout import FairseqDropout
 from fairseq.modules.quant_noise import quant_noise
 from fairseq.models.fairseq_incremental_decoder import FairseqIncrementalDecoder
 
+### BFP imports
+from ..bfp.bfp_ops import BFPLinear, BFPConv2d, F_matmul_bfp
+from ..bfp import bfp_util
 
 # TODO: move this into xformers?
 # TODO: uint8 input type should just output a bool
@@ -92,6 +95,8 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         ] = 16,  # This should be part of the config
     ):
         super().__init__(dictionary)
+        ### Add bfp args (*TBC)
+        self.bfp_args = bfp_util.get_bfp_args()
 
         xformers_att_config = utils.eval_str_dict(xformers_att_config)
         self.use_xformers = xformers_att_config is not None
@@ -121,17 +126,25 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         )
 
         self.k_proj = quant_noise(
-            nn.Linear(self.kdim, embed_dim, bias=bias), q_noise, qn_block_size
+            #nn.Linear(self.kdim, embed_dim, bias=bias),
+            BFPLinear(self.kdim, embed_dim, bias=bias, **self.bfp_args),
+            q_noise, qn_block_size
         )
         self.v_proj = quant_noise(
-            nn.Linear(self.vdim, embed_dim, bias=bias), q_noise, qn_block_size
+            #nn.Linear(self.vdim, embed_dim, bias=bias), 
+            BFPLinear(self.vdim, embed_dim, bias=bias, **self.bfp_args), 
+            q_noise, qn_block_size
         )
         self.q_proj = quant_noise(
-            nn.Linear(embed_dim, embed_dim, bias=bias), q_noise, qn_block_size
+            #nn.Linear(embed_dim, embed_dim, bias=bias), 
+            BFPLinear(embed_dim, embed_dim, bias=bias, **self.bfp_args), 
+            q_noise, qn_block_size
         )
 
         self.out_proj = quant_noise(
-            nn.Linear(embed_dim, embed_dim, bias=bias), q_noise, qn_block_size
+            #nn.Linear(embed_dim, embed_dim, bias=bias),
+            BFPLinear(embed_dim, embed_dim, bias=bias, **self.bfp_args),
+            q_noise, qn_block_size
         )
 
         if add_bias_kv:
