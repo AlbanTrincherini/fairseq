@@ -39,7 +39,6 @@ import unittest
 class rounding_modes:
     """
     When converting fp32 tensors to bfp, the rounding mode can be chosen.
-
     STOC: Stochastic rounding
     DETERM: Deterministic rounding
     """
@@ -77,6 +76,10 @@ def _float_to_bfp(t, mant_bits, epsilon, rounding_mode, device, exp_given=None):
     """
     Convert float tensor t to bfp
     """
+    #print(f'mant: {mant_bits}')
+    #print(t.shape)
+    #print(t)
+
     exp = get_exponent(t, epsilon)
 
     #The interval between two consecutive numbers with that exponent value
@@ -93,7 +96,63 @@ def _float_to_bfp(t, mant_bits, epsilon, rounding_mode, device, exp_given=None):
     return torch.min(torch.max(rounded, -max_v), max_v)
 
 
+
+def float_to_bfp_blocked(t, mant_bits, epsilon, rounding_mode, device, bfp_tile_size=25,
+                       num_format='', weight_mant_bits=0,
+                       sgd_update=False, mant_bits_pow=None):
+    """
+    Convert fp32 tensor t to bfp with tiling.
+    Used for weights (which are handled in the optimizer)
+    """
+    
+    assert num_format == 'bfp'
+    if sgd_update:
+        mant_bits = weight_mant_bits
+
+    orig_shape = t.shape
+    block_size = bfp_tile_size**2
+    if block_size == 0:
+        return _float_to_bfp(t.view(1, -1), mant_bits, epsilon, rounding_mode, device).view(orig_shape)
+
+    padded_shape = list(orig_shape)
+
+    if orig_shape[-1] % block_size != 0:
+        pad_size = block_size - (orig_shape[-1] % block_size)
+        t = F.pad(t, (0,pad_size),'constant')
+        padded_shape[-1] = orig_shape[-1]+pad_size
+
+    t = t.contiguous().view(-1,block_size)
+
+    t = _float_to_bfp(t, mant_bits, epsilon, rounding_mode, device)
+
+    t = t.contiguous().view(padded_shape)
+
+    return t.narrow(-1,0,orig_shape[-1])
+
+
+
 def float_to_bfp_batched(t, mant_bits, epsilon, rounding_mode, device, bfp_tile_size=25,
+                         num_format='', weight_mant_bits=''):
+    """
+    Convert a batch of fp32 tensor t to bfp
+    """
+    """
+    assert num_format == 'bfp'
+    orig_shape = t.size()
+
+    t = t.reshape(t.size()[0], -1)
+    o = _float_to_bfp(t, mant_bits, epsilon, rounding_mode, device)
+    return o.view(orig_shape)
+    """
+    assert num_format == 'bfp'
+    orig_shape = t.size()
+    print(orig_shape)
+
+    t = t.reshape(-1,orig_shape[-1])
+    o = _float_to_bfp(t, mant_bits, epsilon, rounding_mode, device)
+    return o.view(orig_shape)
+
+def float_to_bfp_batched_weight(t, mant_bits, epsilon, rounding_mode, device, bfp_tile_size=25,
                          num_format='', weight_mant_bits=''):
     """
     Convert a batch of fp32 tensor t to bfp
@@ -101,7 +160,12 @@ def float_to_bfp_batched(t, mant_bits, epsilon, rounding_mode, device, bfp_tile_
     assert num_format == 'bfp'
     orig_shape = t.size()
 
-    t = t.view(t.size()[0], -1)
+    # t = t.view(t.size()[0], -1)
+    #print('------------------- in weight batched -------------------')
+    #print(t.shape)
+    #print(t)
+
+    t = t.reshape(t.size()[0], -1)
     o = _float_to_bfp(t, mant_bits, epsilon, rounding_mode, device)
     return o.view(orig_shape)
 
@@ -109,7 +173,6 @@ def float_to_bfp_batched(t, mant_bits, epsilon, rounding_mode, device, bfp_tile_
 def tensor_to_tiled(t, orig_shape, bfp_tile_size):
     """
     Handle the tiling process.
-
     Output: the tiled tensor, the number of tiles in each dimension, the dimensions before and after the tiling to help 'untiling'
     """
     t = t.view(orig_shape[0], -1)
@@ -156,7 +219,6 @@ def float_to_bfp_tiled(t, mant_bits, epsilon, rounding_mode, device, bfp_tile_si
                        sgd_update=False, mant_bits_pow=None):
     """
     Convert fp32 tensor t to bfp with tiling.
-
     Used for weights (which are handled in the optimizer)
     """
     assert num_format == 'bfp'
@@ -164,6 +226,7 @@ def float_to_bfp_tiled(t, mant_bits, epsilon, rounding_mode, device, bfp_tile_si
         mant_bits = weight_mant_bits
 
     orig_shape = t.size()
+    print(orig_shape)
     if bfp_tile_size == 0:
         return _float_to_bfp(t.view(1, -1), mant_bits, epsilon, rounding_mode, device).view(orig_shape)
 
@@ -187,21 +250,16 @@ def _gen_bfp_op(op, name, bfp_args):
     """
     Do the 'sandwich'
     With an original op:
-
     out = op(x, y)
     grad_x, grad_y = op_grad(grad_out)
-
     To the following:
     x_, y_ = input_op(x, y)
     Where input_op(x, y) -> bfp(x), bfp(y)
     and input_op_grad(grad_x, grad_y) -> bfp(grad_x), bfp(grad_y)
-
     out_ = op(x_, y_)
-
     out = output_op(out)
     Where output_op(out) -> bfp(out)
     and output_op_grad(grad_out) -> bfp(grad_out)
-
     This way we garantee that everything in and out of the forward and backward operations is
     properly converted to bfp
     """
@@ -211,7 +269,7 @@ def _gen_bfp_op(op, name, bfp_args):
     class NewOpIn(torch.autograd.Function):
         @staticmethod
         def forward(ctx, x, w):
-            return (float_to_bfp_tiled(x, **bfp_args), float_to_bfp_tiled(w, **bfp_args))
+            return (float_to_bfp_blocked(x, **bfp_args), float_to_bfp_blocked(w, **bfp_args))
 
         @staticmethod
         def backward(ctx, grad_x, grad_w):
@@ -227,7 +285,7 @@ def _gen_bfp_op(op, name, bfp_args):
 
         @staticmethod
         def backward(ctx, op_out_grad):
-            return float_to_bfp_tiled(op_out_grad, **bfp_args)
+            return float_to_bfp_blocked(op_out_grad, **bfp_args)
 
     NewOpOut.__name__ = name + '_Out'
     new_op_out = NewOpOut.apply
@@ -280,7 +338,6 @@ def unpack_bfp_args(kwargs):
 def F_linear_bfp(**kwargs):
     """
     bfp linear function
-
     To be used in the model where F.linear is called
     """
     bfp_args = unpack_bfp_args(kwargs)
@@ -288,6 +345,20 @@ def F_linear_bfp(**kwargs):
         return _get_bfp_op(F.linear, 'linear', bfp_args)
     else:
         return F.linear
+
+### TODO: Check the groupings
+def F_matmul_bfp(**kwargs):
+    """
+    bfp matmul function
+    To be used in the model where torch.matmul is called
+    """
+    bfp_args = unpack_bfp_args(kwargs)
+    if bfp_args['num_format'] == 'bfp':
+        # print("************************************* BFP MATMUL *****************************************")
+        return _get_bfp_op(torch.matmul, 'matmul', bfp_args)
+    else:
+        return torch.matmul
+
 
 
 class BFPConv2d(torch.nn.Conv2d):
@@ -312,6 +383,8 @@ class BFPConv2d(torch.nn.Conv2d):
             conv = self.conv_op(input, self.weight, None, self.stride,
                                 self.padding, self.dilation, self.groups)
             if self.bias is not None:
+                #print(f'shape conv: {conv.shape}')
+                #print(f'bias conv: {self.bias.shape}')
                 return conv + self.bias
             else:
                 return conv
@@ -349,7 +422,6 @@ class TestCases(unittest.TestCase):
         """
         Generate all possible bfp numbers that can be represented with given mantissa bits
         Note that we generate the bfp numbers using 0.mantissa_bits instead of fp32's 1.mantissa_bits)
-
         The implementation of HBFPRepresentables class and representable_numbers function has been adapted from
         https://github.com/TuringMachinegun/float_visualizer/blob/master/visualizer.py
         """
@@ -440,5 +512,24 @@ class TestCases(unittest.TestCase):
                     self.assertIn(tensor_element, bfp_numbers, msg="{} is not representable in bfp with {} mantissa bits".format(tensor_element, mant_bits))
                 #print("...Generated tensor {} \nis representable in bfp with {} mantissa bits as \n{}".format(t, mant_bits, b))
 
+
+def test_F_matmul_bfp():
+    bfp_args = {
+        'num_format': 'bfp',
+        'rounding_mode': 'stoc',
+        'epsilon': 0.00000001,
+        'mant_bits': 7,
+        'weight_mant_bits': 15,
+        'bfp_tile_size': 24,
+        'device': 'gpu'
+    }
+    bfp_matmul = F_matmul_bfp(num_format=bfp_args['num_format'], mant_bits=bfp_args['mant_bits'], weight_mant_bits=bfp_args['weight_mant_bits'], device=bfp_args['device'])
+    a = torch.tensor([[4.0,5.0]]).to("cuda:0")
+    b = torch.tensor([[5.0],[6.0]]).to("cuda:0")
+    res = bfp_matmul(a, b)
+    # print(res)
+    assert res == torch.tensor([[50.0]]).to("cuda:0")
+
 if __name__ == '__main__':
+    test_F_matmul_bfp()
     unittest.main(verbosity=2)
