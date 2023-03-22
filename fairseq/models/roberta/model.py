@@ -27,6 +27,10 @@ from fairseq.utils import safe_getattr, safe_hasattr
 
 from .hub_interface import RobertaHubInterface
 
+### BFP imports
+from ...bfp.bfp_ops import BFPLinear, BFPConv2d, F_matmul_bfp
+from ...bfp import bfp_util
+
 logger = logging.getLogger(__name__)
 
 
@@ -472,12 +476,17 @@ class RobertaLMHead(nn.Module):
 
     def __init__(self, embed_dim, output_dim, activation_fn, weight=None):
         super().__init__()
-        self.dense = nn.Linear(embed_dim, embed_dim)
+        ### Add bfp args (*TBC)
+        self.bfp_args = bfp_util.get_bfp_args()
+
+        #self.dense = nn.Linear(embed_dim, embed_dim)
+        self.dense = BFPLinear(embed_dim, embed_dim, **self.bfp_args)
         self.activation_fn = utils.get_activation_fn(activation_fn)
         self.layer_norm = LayerNorm(embed_dim)
 
         if weight is None:
-            weight = nn.Linear(embed_dim, output_dim, bias=False).weight
+            #weight = nn.Linear(embed_dim, output_dim, bias=False).weight
+            weight = BFPLinear(embed_dim, output_dim, bias=False, **self.bfp_args).weight
         self.weight = weight
         self.bias = nn.Parameter(torch.zeros(output_dim))
 
@@ -510,11 +519,17 @@ class RobertaClassificationHead(nn.Module):
         do_spectral_norm=False,
     ):
         super().__init__()
-        self.dense = nn.Linear(input_dim, inner_dim)
+        ### Add bfp args (*TBC)
+        self.bfp_args = bfp_util.get_bfp_args()
+
+        #self.dense = nn.Linear(input_dim, inner_dim)
+        self.dense = BFPLinear(input_dim, inner_dim, **self.bfp_args)
         self.activation_fn = utils.get_activation_fn(activation_fn)
         self.dropout = nn.Dropout(p=pooler_dropout)
         self.out_proj = apply_quant_noise_(
-            nn.Linear(inner_dim, num_classes), q_noise, qn_block_size
+            #nn.Linear(inner_dim, num_classes), 
+            BFPLinear(inner_dim, num_classes, **self.bfp_args),
+            q_noise, qn_block_size
         )
         if do_spectral_norm:
             if q_noise != 0:
