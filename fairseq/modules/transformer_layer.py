@@ -15,6 +15,10 @@ from fairseq.modules import LayerNorm, MultiheadAttention
 from fairseq.modules.fairseq_dropout import FairseqDropout
 from fairseq.modules.quant_noise import quant_noise
 
+### BFP imports
+from ..bfp.bfp_ops import BFPLinear, BFPConv2d, F_matmul_bfp
+from ..bfp import bfp_util
+
 
 class TransformerEncoderLayerBase(nn.Module):
     """Encoder layer block.
@@ -33,6 +37,9 @@ class TransformerEncoderLayerBase(nn.Module):
 
     def __init__(self, cfg, return_fc=False):
         super().__init__()
+        ### Add bfp args (*TBC)
+        self.bfp_args = bfp_util.get_bfp_args()
+
         self.cfg = cfg
         self.return_fc = return_fc
         self.embed_dim = cfg.encoder.embed_dim
@@ -69,12 +76,16 @@ class TransformerEncoderLayerBase(nn.Module):
 
     def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(
-            nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
+            #nn.Linear(input_dim, output_dim), 
+            BFPLinear(input_dim, output_dim, **self.bfp_args), 
+            p=q_noise, block_size=qn_block_size
         )
 
     def build_fc2(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(
-            nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
+            #nn.Linear(input_dim, output_dim),
+            BFPLinear(input_dim, output_dim, **self.bfp_args), 
+            p=q_noise, block_size=qn_block_size
         )
 
     def _get_fc_rank(self, remove_num: int) -> List[int]:
@@ -104,7 +115,8 @@ class TransformerEncoderLayerBase(nn.Module):
         new_fc1_bias.requires_grad = True
 
         self.fc1 = quant_noise(
-            nn.Linear(self.fc1.in_features, self.fc1.out_features - len(remove_index)),
+            #nn.Linear(self.fc1.in_features, self.fc1.out_features - len(remove_index)),
+            BFPLinear(self.fc1.in_features, self.fc1.out_features - len(remove_index), **self.bfp_args),
             p=self.quant_noise,
             block_size=self.quant_noise_block_size,
         )
@@ -125,7 +137,8 @@ class TransformerEncoderLayerBase(nn.Module):
         new_fc2_bias.requires_grad = True
 
         self.fc2 = quant_noise(
-            nn.Linear(self.fc2.in_features - len(remove_index), self.fc2.out_features),
+            #nn.Linear(self.fc2.in_features - len(remove_index), self.fc2.out_features),
+            BFPLinear(self.fc2.in_features - len(remove_index), self.fc2.out_features, **self.bfp_args),
             p=self.quant_noise,
             block_size=self.quant_noise_block_size,
         )
@@ -259,6 +272,9 @@ class TransformerDecoderLayerBase(nn.Module):
         self, cfg, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False
     ):
         super().__init__()
+        ### Add bfp args (*TBC)
+        self.bfp_args = bfp_util.get_bfp_args()
+
         self.embed_dim = cfg.decoder.embed_dim
         self.dropout_module = FairseqDropout(
             cfg.dropout, module_name=self.__class__.__name__
@@ -342,10 +358,18 @@ class TransformerDecoderLayerBase(nn.Module):
         self.onnx_trace = False
 
     def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
-        return quant_noise(nn.Linear(input_dim, output_dim), q_noise, qn_block_size)
+        return quant_noise(
+            #nn.Linear(input_dim, output_dim),
+            BFPLinear(input_dim, output_dim, self.bfp_args), 
+            q_noise, qn_block_size
+            )
 
     def build_fc2(self, input_dim, output_dim, q_noise, qn_block_size):
-        return quant_noise(nn.Linear(input_dim, output_dim), q_noise, qn_block_size)
+        return quant_noise(
+            #nn.Linear(input_dim, output_dim),
+            BFPLinear(input_dim, output_dim, self.bfp_args), 
+            q_noise, qn_block_size
+            )
 
     def build_self_attention(
         self, embed_dim, cfg, add_bias_kv=False, add_zero_attn=False
