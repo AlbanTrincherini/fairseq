@@ -44,7 +44,7 @@ class BFPAdamConfig(FairseqDataclass):
 
 
 @register_optimizer("BFPadam", dataclass=BFPAdamConfig)
-class FairseqAdam(FairseqOptimizer):
+class FairseqBFPAdam(FairseqOptimizer):
     """Adam optimizer for fairseq.
 
     Important note: this optimizer corresponds to the "AdamW" variant of
