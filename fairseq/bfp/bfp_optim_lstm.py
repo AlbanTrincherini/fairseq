@@ -28,7 +28,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import torch
-from bfp.bfp_ops import float_to_bfp_tiled, unpack_bfp_args
+from .bfp_ops import float_to_bfp_tiled, unpack_bfp_args
 
 required=object()
 
